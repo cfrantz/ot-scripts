@@ -116,6 +116,24 @@ class CommitDatabase(object):
         else:
             return None
 
+    def commits_for_pr(self, pr):
+        cur = self.db.execute("SELECT id FROM commits WHERE pr = ?", (pr,))
+        data = cur.fetchall()
+        return [x[0] for x in data]
+
+    def commit_desc(self, id):
+        cur = self.db.execute("SELECT desc FROM commits_desc WHERE id = ?", (id,))
+        data = cur.fetchall()
+        if len(data):
+            return data[0][0]
+        else:
+            return None
+
+    def commits_by_desc(self, desc):
+        cur = self.db.execute("SELECT id FROM commits_desc WHERE desc = ?", (desc,))
+        data = cur.fetchall()
+        return [x[0] for x in data]
+
     def get_prs(self):
         """Load the PR database into a dict."""
         prs = {}
@@ -124,7 +142,43 @@ class CommitDatabase(object):
         return prs
 
 
-def index_cherrypicks(prs):
+def search_similar_pr(db, data):
+    # Get list of commits for this PR
+    commits = db.commits_for_pr(data['number'])
+    descs = [
+        db.commit_desc(id) for id in commits
+    ]
+    if any(desc is None for desc in descs):
+        # We need all descriptions to continue
+        data["pick"] = None
+        return
+    # Try to find a list of commits with the same description
+    similar_commits = [
+        db.commits_by_desc(desc) for desc in descs
+    ]
+    # Find the PR to which each commit belongs
+    similar_prs_for_commits = [
+        [
+            db.check_git_commit(id)
+            for id in ll
+        ]
+        for ll in similar_commits
+    ]
+    # Intersect all of them
+    similar_prs = set(similar_prs_for_commits[0])
+    for ll in similar_prs_for_commits:
+        similar_prs &= set(ll)
+    # Remove None and original PR
+    similar_prs.discard(data['number'])
+    similar_prs.discard(None)
+    similar_prs = list(similar_prs)
+    if similar_prs:
+        # print("{} -> {} -> {} -> {}".format(data['number'], commits, similar_commits, similar_prs), file=sys.stderr)
+        data["notes"] = "This PR is similar to the following PRs: {}".format(", ".join([str(x) for x in similar_prs]))
+    data["pick"] = None
+
+
+def index_cherrypicks(db, prs):
     """Determine if a PR is a cherry-pick of another PR."""
     cp = re.compile(r"cherry[ -]?pick", re.I)
     pick = re.compile(r"cherry[ -]?pick (?:of |from )(?:#|https.*pull/)(\d+)", re.I)
@@ -141,7 +195,7 @@ def index_cherrypicks(prs):
         elif m := cp.search(data["body"]):
             data["pick"] = 0
         else:
-            data["pick"] = None
+            search_similar_pr(db, data)
 
 
 def on_branch(prs, pr, branch):
