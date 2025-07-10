@@ -118,6 +118,11 @@ class CommitDatabase(object):
             );
         """
         )
+        self.db.execute(
+            """
+            CREATE TABLE IF NOT EXISTS commits_desc (id TEXT, desc TEXT, UNIQUE(id, desc));
+        """
+        )
 
     def insert_git_commit(self, id, obj):
         logging.info("Commit %s is PR %d", id, obj["number"])
@@ -125,6 +130,9 @@ class CommitDatabase(object):
         self.db.execute(
             "INSERT OR IGNORE INTO prs VALUES(?, ?)", (obj["number"], json.dumps(obj))
         )
+
+    def insert_git_commit_desc(self, id, desc):
+        self.db.execute("INSERT INTO commits_desc VALUES(?, ?)", (id, desc))
 
     def check_git_commit(self, id):
         cur = self.db.execute("SELECT pr FROM commits WHERE id = ?", (id,))
@@ -150,15 +158,16 @@ def gitlog(branch, stop):
     commits = []
     for line in data.splitlines():
         line = line.decode("utf-8")
-        (commit, _) = line.split(" ", 1)
-        commits.append(commit)
+        (commit, desc) = line.split(" ", 1)
+        commits.append((commit, desc))
     return commits
 
 
 def build_db(gh, db, branch, stop, limit):
     """Query the GH API to learn PR information about commits on a branch."""
     commits = gitlog(branch, stop)
-    for c in commits:
+    for (c, desc) in commits:
+        db.insert_git_commit_desc(c, desc)
         check = db.check_git_commit(c)
         if check is not None:
             logging.info("Commit %s is already known as PR %d", c, check)
