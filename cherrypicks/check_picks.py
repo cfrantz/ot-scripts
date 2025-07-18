@@ -40,6 +40,11 @@ COLORS_GSPREAD = {
         "red": 0xff / 256,
         "green": 0xff / 256,
         "blue": 0,
+    },
+    "blue": {
+        "red": 0,
+        "green": 0xff / 256,
+        "blue": 0xff / 256,
     }
 }
 
@@ -395,6 +400,15 @@ def render_gspread(spreadsheet, table):
         ]
         for row in table["rows"]
     ], data_range, raw = False)
+    # Fix colors depends on the spreadsheet status
+    status = sheet.get("G{}:G{}".format(first_table_row + 1, first_table_row + 1 + len(table["rows"])))
+    for (i, row) in enumerate(table["rows"]):
+        # Done or not needed is green
+        if status[i][0] in ["Not needed", "Done"]:
+            row["color"] = "green"
+        # In-progress is
+        elif status[i][0] == "In-progress":
+            row["color"] = "blue"
     # Add colors
     sheet.batch_format([
         {
