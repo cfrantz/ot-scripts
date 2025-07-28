@@ -14,4 +14,7 @@ if $(${GH} release list | egrep -q "\s${RELEASE_TAG}\s"); then
     exit 1
 fi
 
-${GH} release create --target="${BRANCH}" "${RELEASE_TAG}" "${DIR}/commits.db"
+${GH} release create \
+    --target="${BRANCH}" \
+    --notes="Release for ${RELEASE_TAG}" \
+    "${RELEASE_TAG}" "${DIR}/commits.db"
