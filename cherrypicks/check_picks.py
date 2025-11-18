@@ -415,8 +415,10 @@ def reorder_rows(sheet, first_table_row, table):
     # The goal is for each row corresponding to <pr> to end at row mapping[<pr>]+first_table_row
     moves = compute_moves(sheet_prs, mapping)
 
-    if len(moves) > 0:
-        print("Some rows need to be re-ordered, manually entered data will be preserved")
+    if len(moves) == 0:
+        return
+
+    print("Some rows need to be re-ordered, manually entered data will be preserved")
 
     requests = [{
             "moveDimension": {
@@ -487,14 +489,19 @@ def render_gspread(spreadsheet, table):
     ], data_range, raw = False)
 
     # Fix colors depends on the spreadsheet status
-    status = sheet.get("G{}:G{}".format(first_table_row + 1, first_table_row + 1 + len(table["rows"])))
+    status_range = "G{}:G{}".format(first_table_row + 1, first_table_row + 1 + len(table["rows"]))
+    status = sheet.get(status_range)
     for (i, row) in enumerate(table["rows"]):
         # Done or not needed is green
         if status[i][0] in ["Not needed", "Done"]:
             row["color"] = "green"
-        # In-progress is
+        # In-progress is blue
         elif status[i][0] == "In-progress":
             row["color"] = "blue"
+        elif status[i][0] == "Unknown" and row["color"] == "green":
+            status[i][0] = "Not needed"
+    # Update statuses
+    sheet.update(status, status_range, raw = False)
     # Add colors
     sheet.batch_format([
         {
@@ -505,6 +512,7 @@ def render_gspread(spreadsheet, table):
         }
         for (i, row) in enumerate(table["rows"])
     ])
+
     # Make headers bold and frozen
     sheet.format(str(first_table_row), {'textFormat': {'bold': True}})
     sheet.freeze(first_table_row)
