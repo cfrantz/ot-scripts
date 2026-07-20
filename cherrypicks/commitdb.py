@@ -14,6 +14,7 @@ import sys
 import sqlite3
 from pprint import pprint
 from copy import copy
+from pathlib import Path
 
 flags = argparse.ArgumentParser(description="Commits database builder")
 flags.add_argument(
@@ -32,6 +33,7 @@ flags.add_argument(
 flags.add_argument(
     "-b", "--branch", type=str, action="append", help="Branches to parse"
 )
+flags.add_argument("--git", type=Path, default=Path("."), help="Path to a checkout of the git repository")
 flags.add_argument("--stop", type=str, help="Commit to stop at in git log")
 flags.add_argument(
     "--limit",
@@ -44,12 +46,12 @@ flags.add_argument("database", type=str, help="Database file")
 
 class GithubApi(object):
 
-    def __init__(self, gh, dry_run=False):
+    def __init__(self, gh, dry_run=False, git_path=Path(".")):
         self.gh = gh
         self.dry_run = dry_run
+        self.git_path = git_path
 
-    @staticmethod
-    def call(args, dry_run=False):
+    def call(self, args, dry_run=False):
         """Call a subprocess.
 
         Args:
@@ -63,7 +65,8 @@ class GithubApi(object):
             print()
             return ""
         else:
-            return subprocess.check_output(args)
+            logging.debug(f"Running {args}")
+            return subprocess.check_output(args, cwd = self.git_path)
 
     def get_commit(self, id):
         items = [
@@ -86,7 +89,8 @@ class GithubApi(object):
             "-s",
             "merged",
             "--search",
-            id,
+            # Don't search in comments, otherwise it could match by mistake
+            "{} !in:comments".format(id),
             "--json",
             ",".join(items),
         ]
@@ -135,7 +139,7 @@ class CommitDatabase(object):
             return None
 
 
-def gitlog(branch, stop):
+def gitlog(branch, stop, git_path):
     """Get a list of git commit-ids on the given branch."""
     command = [
         "git",
@@ -146,7 +150,7 @@ def gitlog(branch, stop):
     if stop:
         branch = f"{stop}..{branch}"
     command.append(branch)
-    data = subprocess.check_output(command)
+    data = subprocess.check_output(command, cwd = git_path)
     commits = []
     for line in data.splitlines():
         line = line.decode("utf-8")
@@ -155,15 +159,18 @@ def gitlog(branch, stop):
     return commits
 
 
-def build_db(gh, db, branch, stop, limit):
+def build_db(gh, db, branch, stop, limit, git_path):
     """Query the GH API to learn PR information about commits on a branch."""
-    commits = gitlog(branch, stop)
+    commits = gitlog(branch, stop, git_path)
     for c in commits:
+        logging.debug(f"Processing {c}...")
         check = db.check_git_commit(c)
         if check is not None:
             logging.info("Commit %s is already known as PR %d", c, check)
             continue
+        logging.debug("Commit is new")
         data = gh.get_commit(c)
+        logging.debug(f"Commit info: {data}")
         for d in data:
             db.insert_git_commit(c, d)
         limit -= 1
@@ -176,7 +183,7 @@ def main(args):
 
     db = CommitDatabase(args.database)
     db.create_schema()
-    gh = GithubApi(args.gh_bin, args.dry_run)
+    gh = GithubApi(args.gh_bin, args.dry_run, args.git)
 
     if not args.branch:
         logging.error("You must supply at least one --branch")
@@ -184,7 +191,7 @@ def main(args):
 
     for branch in args.branch:
         logging.info("Processing branch %s...", branch)
-        build_db(gh, db, branch, args.stop, args.limit)
+        build_db(gh, db, branch, args.stop, args.limit, args.git)
     return 0
 
 
