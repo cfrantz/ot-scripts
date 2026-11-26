@@ -7,6 +7,7 @@
 import argparse
 import datetime
 import re
+import regex
 import json
 import logging
 import subprocess
@@ -132,28 +133,34 @@ class CommitDatabase(object):
 
 def index_cherrypicks(prs):
     """Determine if a PR is a cherry-pick of another PR."""
+    match_cp = r"cherry[ -]?pick(?: of| from)"
+    match_backport = r"backport(?: of)?"
+    match_pr_with_group = r"(?:#|https.*pull/)(\d+)"
+    match_prs = r"(?:(?: |, | and ){})+".format(match_pr_with_group)
+    pick_regex = r"(?:(?:{cp})|(?:{backport})){prs}".format(
+        cp = match_cp,
+        backport = match_backport,
+        prs = match_prs
+    )
+    print(pick_regex)
+
     cp = re.compile(r"cherry[ -]?pick", re.I)
-    pick = re.compile(r"cherry[ -]?pick (?:of |from )(?:#|https.*pull/)(\d+)", re.I)
-    backport = re.compile(r"backport(?: of)? (?:#|https.*pull/)(\d+)", re.I)
+    # The standard re module does not support repeated captures but the regex module does.
+    pick = regex.compile(pick_regex, re.I)
     for data in prs.values():
-        if m := pick.search(data["body"]):
-            data["pick"] = int(m.group(1))
-        elif m := pick.search(data["title"]):
-            data["pick"] = int(m.group(1))
-        elif m := backport.search(data["title"]):
-            data["pick"] = int(m.group(1))
-        elif m := backport.search(data["body"]):
-            data["pick"] = int(m.group(1))
-        elif m := cp.search(data["body"]):
-            data["pick"] = 0
-        else:
-            data["pick"] = None
+        data["pick"] = []
+        # Search in title and body.
+        for txt in [data["body"], data["title"]]:
+            # There might be several lines of cherry-picks so we need to check all of them.
+            for m in pick.finditer(txt):
+                # One line may contain several, e.g. "back port #12, #24 and #35"
+                data["pick"].extend([int(x) for x in m.captures(1)])
 
 
 def on_branch(prs, pr, branch):
     """Determine if `pr` was cherry-picked to `branch`."""
     table = {
-        k: v for k, v in prs.items() if v["baseRefName"] == branch and v["pick"] == pr
+        k: v for k, v in prs.items() if v["baseRefName"] == branch and pr in v["pick"]
     }
     if len(table) == 1:
         return list(table.values())[0]
@@ -168,13 +175,13 @@ def tabulate_branch(prs, branch):
 
     for k, v in table.items():
         if v["pick"]:
-            # if the item is a cherrypick, figure out where it came from.
-            if src := prs.get(v["pick"]):
+            # if the item is a cherrypick, figure out where it came from by looking at the first PR.
+            if src := prs.get(v["pick"][0]):
                 v["from"] = src["baseRefName"]
                 if v["from"] != "master":
                     # If the item didn't come from master, figure out if it
                     # exists on master.
-                    if to_master := on_branch(prs, v["pick"], "master"):
+                    if to_master := on_branch(prs, v["pick"][0], "master"):
                         # was the cherry-pick picked separately to master.
                         v["to_master"] = to_master["number"]
                     elif to_master := on_branch(prs, k, "master"):
