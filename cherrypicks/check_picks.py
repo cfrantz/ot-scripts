@@ -403,9 +403,10 @@ def unittest_moves():
 
 def open_gspread(args):
     import gspread
-    if not args.credentials:
-        sys.exit("You need to pass credentials using --credentials")
-    gc = gspread.oauth(credentials_filename=args.credentials)
+    if args.credentials:
+        gc = gspread.oauth(credentials_filename=args.credentials)
+    else:
+        gc = gspread.oauth()
     return gc.open_by_url(args.spreadsheet_url)
 
 
