@@ -403,15 +403,27 @@ def unittest_moves():
 
 def open_gspread(args):
     import gspread
-    if not args.credentials:
-        sys.exit("You need to pass credentials using --credentials")
-    gc = gspread.oauth(credentials_filename=args.credentials)
+    if args.credentials:
+        gc = gspread.oauth(credentials_filename=args.credentials)
+    else:
+        gc = gspread.oauth()
     return gc.open_by_url(args.spreadsheet_url)
 
 
 def reorder_rows(sheet, first_table_row, table):
-    sheet_prs = [int(pr) for pr in sheet.col_values(1)[first_table_row:]]
+    sheet_prs = [int(pr) for pr in sheet.col_values(1)[first_table_row:] if pr.strip() != ""]
     mapping = table["mapping"]
+    # If the database does not contain all entries currently in the spreadsheet, the mapping
+    # will be incomplete. In this case, default to putting those entries at the very end.
+    for pr in sheet_prs:
+        if pr not in mapping:
+            logging.error("PR %d exists in the spreadsheet but not in the database, it will be moved to the end", pr)
+            mapping[pr] = len(mapping)
+    # Conversely, the algorithm expects that the set of keys in the mapping matches the initial rows.
+    # Hence we fakely add non-existent keys.
+    fake_prs = set(mapping.keys()) - set(sheet_prs)
+    for pr in fake_prs:
+        sheet_prs.append(pr)
     # The goal is for each row corresponding to <pr> to end at row mapping[<pr>]+first_table_row
     moves = compute_moves(sheet_prs, mapping)
 
@@ -438,8 +450,12 @@ def reorder_rows(sheet, first_table_row, table):
     })
 
     # Re-query after the move to make sure that it is correct.
-    sheet_prs = [int(pr) for pr in sheet.col_values(1)[first_table_row:]]
+    sheet_prs = [pr for pr in sheet.col_values(1)[first_table_row:]]
     for (idx, pr) in enumerate(sheet_prs):
+        # Since we inserted fake PRs, we may end up with empty lines, so skip those.
+        if pr.strip() == "":
+            continue
+        pr = int(pr)
         assert table["mapping"][pr] == idx, "The order of the rows after the move does not match the expected order, this might indicate a bug in the tool, please revert the change on the spreadsheet and fix the bug"
 
 
@@ -492,6 +508,9 @@ def render_gspread(spreadsheet, table):
     status_range = "G{}:G{}".format(first_table_row + 1, first_table_row + 1 + len(table["rows"]))
     status = sheet.get(status_range)
     for (i, row) in enumerate(table["rows"]):
+        # Handle the case of new line with no content yet.
+        if len(status[i]) == 0:
+            status[i] = ["Unknown"]
         # Done or not needed is green
         if status[i][0] in ["Not needed", "Done"]:
             row["color"] = "green"
@@ -526,6 +545,14 @@ def render_gspread(spreadsheet, table):
     sheet.add_protected_range(
         data_range,
         description = PROTECTED_RANGE_DESC,
+        # TODO: make this configurable?
+        editor_users_emails=[
+            "amaury.pouly@opentitan.org",
+            "amaury.pouly@gmail.com",
+            "luismarques@lowrisc.org",
+            "cfrantz@opentitan.org",
+        ],
+        warning_only=True,
     )
 
 
